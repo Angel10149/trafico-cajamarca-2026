@@ -355,7 +355,7 @@ with st.expander("📚 Ficha Técnica del Modelo Final y Transparencia Metodoló
     with col_t1:
         st.markdown(r"""
         **Arquitectura y Datos:**
-        * **Modelo final:** XGBoost Regressor (`learning_rate=0.01`, `max_depth=7`, `subsample=0.8`, `reg_lambda=1`, parada temprana 50 rondas).
+        * **Modelo final:** XGBoost Regressor (`learning_rate=0.05`, `max_depth=7`, `subsample=0.8`, `reg_lambda=1`, parada temprana 50 rondas).
         * **Variables seleccionadas (Tabla 22):** Solo calendario (**11 variables**: `hora`, `dia_semana` one-hot y `via` one-hot).
         * **Dataset:** `aforos_cajamarca.csv` (4 212 intervalos de 15 min, 27 días: 16/05 al 11/06/2023), reconstruido a partir de perfiles de aforo de referencia (García Díaz, 2023; Cusquisibán Del Campo, 2023) y clima de Open-Meteo.
         * **Partición cronológica sin fuga:** 18 días entrenamiento (2 808), 4 validación (624), 5 prueba (780; evaluación común 08:00–19:45 = 720).
