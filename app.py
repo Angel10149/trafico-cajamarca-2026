@@ -1,356 +1,376 @@
-import streamlit as st
-import pandas as pd
-import numpy as np
-import joblib
-import plotly.graph_objects as go
-import plotly.express as px
+import os
 import time
+import joblib
+import numpy as np
+import pandas as pd
+import plotly.express as px
+import plotly.graph_objects as go
+import streamlit as st
+from sklearn.metrics import (
+    mean_absolute_error,
+    mean_absolute_percentage_error,
+    r2_score,
+    root_mean_squared_error,
+)
 
 # 1. Configuración de página
 st.set_page_config(
-    page_title="Predicción de Tráfico Cajamarca 2026",
+    page_title="Predicción de Tráfico Cajamarca 2026 (v2)",
     page_icon="🚦",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="expanded",
 )
 
-# Estilos CSS personalizados
-st.markdown("""
+st.markdown(
+    """
 <style>
     .main-header {
-        font-size: 2.2rem;
+        font-size: 2.1rem;
         font-weight: 700;
         color: #1E3A8A;
         text-align: center;
         margin-bottom: 0.2rem;
     }
     .sub-header {
-        font-size: 1.1rem;
+        font-size: 1.05rem;
         color: #4B5563;
         text-align: center;
-        margin-bottom: 1.5rem;
-    }
-    .kpi-card {
-        background-color: #F8FAFC;
-        border-radius: 10px;
-        padding: 1.2rem;
-        border-left: 5px solid #3B82F6;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        margin-bottom: 1.2rem;
     }
     .status-badge-green {
-        background-color: #DEF7EC;
-        color: #03543F;
-        padding: 6px 14px;
-        border-radius: 20px;
-        font-weight: bold;
-        display: inline-block;
+        background-color: #DEF7EC; color: #03543F;
+        padding: 6px 14px; border-radius: 20px; font-weight: bold; display: inline-block;
     }
     .status-badge-yellow {
-        background-color: #FEF08A;
-        color: #854D0E;
-        padding: 6px 14px;
-        border-radius: 20px;
-        font-weight: bold;
-        display: inline-block;
+        background-color: #FEF08A; color: #854D0E;
+        padding: 6px 14px; border-radius: 20px; font-weight: bold; display: inline-block;
     }
     .status-badge-red {
-        background-color: #FDE8E8;
-        color: #9B1C1C;
-        padding: 6px 14px;
-        border-radius: 20px;
-        font-weight: bold;
-        display: inline-block;
+        background-color: #FDE8E8; color: #9B1C1C;
+        padding: 6px 14px; border-radius: 20px; font-weight: bold; display: inline-block;
     }
 </style>
-""", unsafe_allow_html=True)
+""",
+    unsafe_allow_html=True,
+)
 
-# 2. Cargar modelo serializado
+
 @st.cache_resource
 def load_bundle():
-    try:
-        bundle = joblib.load("modelo_xgboost_cajamarca.pkl")
-        return bundle
-    except Exception as e:
-        st.error(f"Error al cargar el modelo: {e}")
-        return None
+    return joblib.load("modelo_xgboost_cajamarca.pkl")
+
+
+@st.cache_data
+def load_dataset():
+    if os.path.exists("aforos_cajamarca.csv"):
+        df = pd.read_csv("aforos_cajamarca.csv")
+        df["fecha_hora"] = pd.to_datetime(df["fecha_hora"])
+        df["fecha"] = df["fecha_hora"].dt.date
+        return df.sort_values(["via", "fecha_hora"]).reset_index(drop=True)
+    return None
+
 
 bundle = load_bundle()
-
-# Encabezado principal
-st.markdown('<div class="main-header">🚦 Sistema Predictivo de Tráfico Vehicular — Cajamarca 2026</div>', unsafe_allow_html=True)
-st.markdown('<div class="sub-header">Modelo de Machine Learning (XGBoost) para Semaforización Adaptativa y Reducción de la Congestión Urbana</div>', unsafe_allow_html=True)
-
-if bundle is None:
-    st.warning("No se encontró el archivo del modelo `modelo_xgboost_cajamarca.pkl`. Asegúrese de que esté en el mismo directorio.")
-    st.stop()
+df_data = load_dataset()
 
 modelo = bundle["modelo"]
 features = bundle["features"]
-cols_via = bundle["cols_via"]
 umbrales = bundle["umbrales"]
-composicion_modal = bundle["composicion_modal"]
+margen_alerta = float(bundle.get("margen_alerta", 0.01))
+metricas_rep = bundle.get("metricas_prueba_720", {})
 
-# 3. Barra Lateral: Parámetros Operativos
-st.sidebar.header("⚙️ Parámetros de Simulación")
+DIAS_DICT = {
+    "Lunes": 0,
+    "Martes": 1,
+    "Miércoles": 2,
+    "Jueves": 3,
+    "Viernes": 4,
+    "Sábado": 5,
+    "Domingo": 6,
+}
 
-corredor_sel = st.sidebar.selectbox(
-    "Corredor Vial Estructurante",
-    ["Av. Hoyos Rubio (Evitamiento Norte)", "Av. Atahualpa (Evitamiento Sur)", "Av. Los Héroes"],
-    index=0
-)
-
-# Mapeo de nombre
-via_map = {
+CORREDORES_LABELS = {
     "Av. Hoyos Rubio (Evitamiento Norte)": "Av. Hoyos Rubio",
     "Av. Atahualpa (Evitamiento Sur)": "Av. Atahualpa",
-    "Av. Los Héroes": "Av. Los Héroes"
+    "Av. Los Héroes": "Av. Los Héroes",
 }
-via_clean = via_map[corredor_sel]
-umb_via = umbrales[via_clean]
 
-st.sidebar.markdown("---")
-st.sidebar.subheader("🕒 Contexto Temporal")
-
-dias_dict = {
-    "Lunes": 0, "Martes": 1, "Miércoles": 2, "Jueves": 3,
-    "Viernes": 4, "Sábado": 5, "Domingo": 6
+COMPOSICION_MODAL = {
+    "Mototaxis": 28.0,
+    "Motos lineales": 18.0,
+    "Autos / Camionetas": 35.0,
+    "Combis / Transporte": 11.0,
+    "Pesados / Buses": 6.0,
 }
-dia_nom = st.sidebar.selectbox("Día de la Semana", list(dias_dict.keys()), index=0)
-dia_semana = dias_dict[dia_nom]
+
+FHP_REF = {
+    "Av. Atahualpa": 0.946,
+    "Av. Hoyos Rubio": 0.943,
+    "Av. Los Héroes": 0.952,
+}
+
+
+def build_feature_row(corredor: str, dia_idx: int, hora_dec: float) -> pd.DataFrame:
+    row = {c: 0.0 for c in features}
+    row["hora"] = float(hora_dec)
+    dia_col = f"dia_semana_{dia_idx}"
+    via_col = f"via_{corredor}"
+    if dia_col in row:
+        row[dia_col] = 1.0
+    if via_col in row:
+        row[via_col] = 1.0
+    return pd.DataFrame([row])[features]
+
+
+def clasificar_nivel(vol: float, corredor: str):
+    p50 = umbrales[corredor]["P50"]
+    p85 = umbrales[corredor]["P85"]
+    umbral_alerta = p85 * (1.0 - margen_alerta)
+    if vol < p50:
+        return (
+            "Bajo",
+            '<span class="status-badge-green">🟢 BAJO</span>',
+            "Ciclo semafórico base (60 s). Operación fluida sin intervención adicional.",
+            "#10B981",
+        )
+    elif vol < umbral_alerta:
+        return (
+            "Moderado",
+            '<span class="status-badge-yellow">🟡 MODERADO</span>',
+            "Ciclo semafórico intermedio (80 s). Extender fase verde en eje principal +10 s.",
+            "#F59E0B",
+        )
+    else:
+        return (
+            "Alto",
+            '<span class="status-badge-red">🔴 ALTO / ALERTA DE CONGESTIÓN</span>',
+            "Ciclo extendido de saturación (100 s). Priorizar fase verde (+25 s) y monitoreo operativo.",
+            "#EF4444",
+        )
+
+
+# Encabezado
+st.markdown(
+    '<div class="main-header">🚦 Sistema Predictivo de Flujo Vehicular — Cajamarca 2026</div>',
+    unsafe_allow_html=True,
+)
+st.markdown(
+    '<div class="sub-header">Modelo Final XGBoost (Solo Calendario, 11 variables) con Alerta Calibrada de Congestión</div>',
+    unsafe_allow_html=True,
+)
+
+# Barra lateral
+st.sidebar.header("⚙️ Parámetros de Consulta")
+corredor_lbl = st.sidebar.selectbox(
+    "Corredor Vial Estructurante", list(CORREDORES_LABELS.keys()), index=0
+)
+via_sel = CORREDORES_LABELS[corredor_lbl]
+dia_nom = st.sidebar.selectbox("Día de la Semana", list(DIAS_DICT.keys()), index=3)
+dia_idx = DIAS_DICT[dia_nom]
 
 hora_sel = st.sidebar.slider(
-    "Hora del Día (Formato decimal)",
-    min_value=6.5,
-    max_value=20.0,
-    value=7.75,
+    "Hora del Día (07:00 a 19:45)",
+    min_value=7.0,
+    max_value=19.75,
+    value=7.5,
     step=0.25,
-    format="%.2f h"
+    format="%.2f h",
 )
-
-# Convertir hora decimal a texto legible
-hora_int = int(hora_sel)
-min_int = int(round((hora_sel - hora_int) * 60))
-hora_txt = f"{hora_int:02d}:{min_int:02d}"
-st.sidebar.caption(f"⏰ Hora seleccionada: **{hora_txt}**")
-
-es_feriado_bool = st.sidebar.checkbox("¿Es Feriado o Día No Laborable?", value=False)
-feriado = 1 if es_feriado_bool else 0
+h_int = int(hora_sel)
+m_int = int(round((hora_sel - h_int) * 60))
+hora_txt = f"{h_int:02d}:{m_int:02d}"
+st.sidebar.caption(f"⏰ Intervalo seleccionado: **{hora_txt}**")
 
 st.sidebar.markdown("---")
-st.sidebar.subheader("🌧️ Condiciones Meteorológicas (Open-Meteo)")
-
-clima_preset = st.sidebar.radio(
-    "Preset Climático Andino:",
-    ["Seco / Despejado (18°C, 0 mm)", "Llovizna Ligera (14°C, 1.2 mm)", "Lluvia Intensa (11°C, 5.8 mm)", "Manual"]
+st.sidebar.info(
+    "**Modelo final v2 (Tabla 22):** Seleccionado por menor RMSE en validación. "
+    "Usa únicamente **hora, día de la semana y corredor** (11 variables), por lo que "
+    "no depende de sensores de rezago ni clima en tiempo real."
 )
 
-if clima_preset == "Seco / Despejado (18°C, 0 mm)":
-    temperatura = 18.0
-    precipitacion = 0.0
-elif clima_preset == "Llovizna Ligera (14°C, 1.2 mm)":
-    temperatura = 14.0
-    precipitacion = 1.2
-elif clima_preset == "Lluvia Intensa (11°C, 5.8 mm)":
-    temperatura = 11.0
-    precipitacion = 5.8
-else:
-    temperatura = st.sidebar.slider("Temperatura (°C)", 8.0, 26.0, 16.0, 0.5)
-    precipitacion = st.sidebar.slider("Precipitación acumulada (mm)", 0.0, 15.0, 0.0, 0.2)
+# Pestañas principales
+tab_est, tab_val = st.tabs(
+    ["🔮 Estimación y Alerta Operativa", "📊 Validación con Días de Prueba (07/06–11/06/2023)"]
+)
 
-st.sidebar.markdown("---")
-st.sidebar.subheader("📊 Inercia del Flujo Vehicular")
+# ==============================================================================
+# PESTAÑA 1: ESTIMACIÓN EN TIEMPO REAL
+# ==============================================================================
+with tab_est:
+    X_in = build_feature_row(via_sel, dia_idx, hora_sel)
+    t0 = time.perf_counter()
+    pred_vol = float(modelo.predict(X_in)[0])
+    lat_ms = (time.perf_counter() - t0) * 1000
 
-# Estimación base según vía y hora
-if 7.25 <= hora_sel <= 8.75 or 12.75 <= hora_sel <= 14.0 or 18.0 <= hora_sel <= 19.5:
-    flujo_base = umb_via["P85"] * 0.95
-else:
-    flujo_base = umb_via["P50"] * 0.85
+    p50_v = umbrales[via_sel]["P50"]
+    p85_v = umbrales[via_sel]["P85"]
+    alerta_v = p85_v * (1.0 - margen_alerta)
+    nivel_txt, badge_html, rec_sem, color_pt = clasificar_nivel(pred_vol, via_sel)
 
-lag_1 = st.sidebar.number_input("Flujo hace 15 min (vehículos)", min_value=50, max_value=1200, value=int(flujo_base))
-lag_2 = st.sidebar.number_input("Flujo hace 30 min (vehículos)", min_value=50, max_value=1200, value=int(flujo_base * 0.92))
-lag_4 = st.sidebar.number_input("Flujo hace 60 min (vehículos)", min_value=50, max_value=1200, value=int(flujo_base * 0.88))
-lag_dia = st.sidebar.number_input("Mismo intervalo ayer (vehículos)", min_value=50, max_value=1200, value=int(flujo_base))
-media_1h = (lag_1 + lag_2 + lag_4) / 3.0
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        st.metric("Volumen Estimado (15 min)", f"{pred_vol:.0f} veh")
+    with c2:
+        st.metric("Tasa Horaria Equivalente", f"{pred_vol * 4:.0f} veh/h", delta=f"FHP medio: {FHP_REF[via_sel]:.3f}")
+    with c3:
+        st.write("**Nivel de Congestión (Alerta Calibrada):**")
+        st.markdown(badge_html, unsafe_allow_html=True)
+        st.caption(f"P50: {p50_v:.0f} | Alerta (-{margen_alerta*100:.1f}%): {alerta_v:.0f} | P85: {p85_v:.0f}")
+    with c4:
+        st.metric("Latencia de Inferencia", f"{lat_ms:.2f} ms", delta="Umbral < 2 000 ms")
 
-# 4. Inferencia con XGBoost
-input_dict = {
-    "hora": hora_sel,
-    "dia_semana": dia_semana,
-    "feriado": feriado,
-    "precipitacion": precipitacion,
-    "temperatura": temperatura,
-    "lag_1": lag_1,
-    "lag_2": lag_2,
-    "lag_4": lag_4,
-    "lag_dia": lag_dia,
-    "media_1h": media_1h
-}
+    st.info(
+        f"**Corredor:** {corredor_lbl} | **Día:** {dia_nom} | **Hora:** {hora_txt}  \n"
+        f"**Recomendación Semafórica:** {rec_sem}"
+    )
 
-for col in cols_via:
-    if f"via_{via_clean}" == col:
-        input_dict[col] = 1.0
+    col_g1, col_g2 = st.columns([6, 4])
+    with col_g1:
+        horas_dia = np.arange(7.0, 20.0, 0.25)
+        X_dia = pd.concat([build_feature_row(via_sel, dia_idx, h) for h in horas_dia], ignore_index=True)
+        preds_dia = modelo.predict(X_dia)
+        etq_horas = [f"{int(h):02d}:{int(round((h - int(h)) * 60)):02d}" for h in horas_dia]
+
+        fig_line = go.Figure()
+        fig_line.add_trace(
+            go.Scatter(
+                x=etq_horas, y=preds_dia, mode="lines",
+                name="Perfil estimado XGBoost", line=dict(color="#2563EB", width=3)
+            )
+        )
+        fig_line.add_hline(y=p85_v, line_dash="dash", line_color="#DC2626", annotation_text=f"P85 ({p85_v:.0f})")
+        fig_line.add_hline(y=alerta_v, line_dash="dot", line_color="#EA580C", annotation_text=f"Alerta ({alerta_v:.0f})")
+        fig_line.add_hline(y=p50_v, line_dash="dot", line_color="#10B981", annotation_text=f"P50 ({p50_v:.0f})")
+        fig_line.add_trace(
+            go.Scatter(
+                x=[hora_txt], y=[pred_vol], mode="markers", name="Hora consultada",
+                marker=dict(color=color_pt, size=14, symbol="diamond", line=dict(color="black", width=1.5)),
+            )
+        )
+        fig_line.update_layout(
+            title=f"Perfil Diario Estimado — {corredor_lbl} ({dia_nom})",
+            xaxis_title="Hora del día",
+            yaxis_title="Vehículos / 15 min",
+            hovermode="x unified",
+            height=380,
+            margin=dict(l=20, r=20, t=45, b=20),
+        )
+        st.plotly_chart(fig_line, use_container_width=True)
+
+    with col_g2:
+        modal_df = pd.DataFrame(
+            [{"Tipo": k, "Volumen": pred_vol * (v / 100.0)} for k, v in COMPOSICION_MODAL.items()]
+        )
+        fig_pie = px.pie(
+            modal_df, names="Tipo", values="Volumen",
+            title="Composición Modal de Referencia (Cajamarca)",
+            color_discrete_sequence=["#F59E0B", "#EF4444", "#3B82F6", "#10B981", "#8B5CF6"],
+        )
+        fig_pie.update_traces(textposition="inside", textinfo="percent+label")
+        fig_pie.update_layout(height=380, margin=dict(l=20, r=20, t=45, b=20))
+        st.plotly_chart(fig_pie, use_container_width=True)
+
+# ==============================================================================
+# PESTAÑA 2: VALIDACIÓN CON LOS 5 DÍAS DE PRUEBA (2023-06-07 a 2023-06-11)
+# ==============================================================================
+with tab_val:
+    if df_data is None:
+        st.warning("No se encontró `aforos_cajamarca.csv` para mostrar la pestaña de validación.")
     else:
-        input_dict[col] = 0.0
+        fechas_unicas = sorted(df_data["fecha"].unique())
+        dias_test = fechas_unicas[22:]  # Últimos 5 días de prueba (07/06 al 11/06/2023)
+        df_te = df_data[df_data["fecha"].isin(dias_test)].copy()
 
-df_input = pd.DataFrame([input_dict])[features]
+        # Predecir sobre todos los intervalos de prueba
+        X_te = pd.concat(
+            [build_feature_row(r["via"], int(r["dia_semana"]), float(r["hora"])) for _, r in df_te.iterrows()],
+            ignore_index=True,
+        )
+        df_te["pred"] = modelo.predict(X_te)
+        df_te_720 = df_te[df_te["hora"] >= 8.0]
 
-# Medir latencia de inferencia
-t0 = time.perf_counter()
-pred_volumen = float(modelo.predict(df_input)[0])
-t1 = time.perf_counter()
-latencia_ms = (t1 - t0) * 1000
+        r2_t = r2_score(df_te_720["volumen"], df_te_720["pred"])
+        mape_t = mean_absolute_percentage_error(df_te_720["volumen"], df_te_720["pred"]) * 100
+        mae_t = mean_absolute_error(df_te_720["volumen"], df_te_720["pred"])
+        rmse_t = root_mean_squared_error(df_te_720["volumen"], df_te_720["pred"])
 
-pred_volumen = max(30.0, pred_volumen)
-pred_vhmd = pred_volumen * 4.0
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("R² en Prueba (n = 720)", f"{r2_t:.4f}")
+        m2.metric("MAPE en Prueba", f"{mape_t:.2f} %")
+        m3.metric("MAE en Prueba", f"{mae_t:.2f} veh")
+        m4.metric("RMSE en Prueba", f"{rmse_t:.2f} veh")
 
-# Clasificación de Nivel de Congestión
-if pred_volumen < umb_via["P50"]:
-    nivel_congest = "Bajo"
-    badge_html = '<span class="status-badge-green">🟢 BAJO FLUIDO</span>'
-    los_estimado = "Nivel de Servicio B / C"
-    semaforo_rec = "Ciclo Semafórico Base (60 s). Prioridad normal de fase verde."
-    color_grafico = "#10B981"
-elif pred_volumen < umb_via["P85"]:
-    nivel_congest = "Moderado"
-    badge_html = '<span class="status-badge-yellow">🟡 MODERADO / REGULAR</span>'
-    los_estimado = "Nivel de Servicio D"
-    semaforo_rec = "Ciclo Semafórico Intermedio (80 s). Extender verde en eje principal +10 s."
-    color_grafico = "#F59E0B"
-else:
-    nivel_congest = "Alto"
-    badge_html = '<span class="status-badge-red">🔴 CONGESTIÓN ALTA (CRÍTICO)</span>'
-    los_estimado = "Nivel de Servicio E / F (Saturación)"
-    semaforo_rec = "Ciclo Extendido de Saturación (100 s). Fase verde máxima (+25 s) y alerta de desvío."
-    color_grafico = "#EF4444"
+        fecha_sel = st.selectbox(
+            "Seleccionar día del conjunto de prueba (no visto en entrenamiento):",
+            dias_test,
+            index=1 if len(dias_test) > 1 else 0,
+            format_func=lambda d: d.strftime("%d/%m/%Y"),
+        )
+        sub_d = df_te[df_te["fecha"] == fecha_sel].sort_values(["via", "hora"])
 
-# 5. Renderizado del Dashboard Principal
-col_kpi1, col_kpi2, col_kpi3, col_kpi4 = st.columns(4)
+        fig_val = go.Figure()
+        colores = {"Av. Hoyos Rubio": "#D62728", "Av. Atahualpa": "#1F77B4", "Av. Los Héroes": "#2CA02C"}
+        for via, g in sub_d.groupby("via"):
+            etq_h = [f"{int(h):02d}:{int(round((h - int(h)) * 60)):02d}" for h in g["hora"]]
+            fig_val.add_trace(
+                go.Scatter(x=etq_h, y=g["volumen"], mode="lines", name=f"{via} (Observado)",
+                           line=dict(color=colores[via], width=2.4))
+            )
+            fig_val.add_trace(
+                go.Scatter(x=etq_h, y=g["pred"], mode="lines", name=f"{via} (Estimado)",
+                           line=dict(color=colores[via], width=2.0, dash="dash"))
+            )
+        fig_val.update_layout(
+            title=f"Flujo Observado vs. Estimado — Día de Prueba {fecha_sel.strftime('%d/%m/%Y')}",
+            xaxis_title="Hora del día",
+            yaxis_title="Volumen (veh / 15 min)",
+            hovermode="x unified",
+            height=420,
+            margin=dict(l=20, r=20, t=45, b=20),
+        )
+        st.plotly_chart(fig_val, use_container_width=True)
 
-with col_kpi1:
-    st.markdown('<div class="kpi-card">', unsafe_allow_html=True)
-    st.metric("Demanda Prevista (15 min)", f"{pred_volumen:.0f} veh", delta=f"{pred_volumen - lag_1:+.0f} vs hace 15m")
-    st.markdown('</div>', unsafe_allow_html=True)
+        # Tabla desagregada por corredor
+        rows_via = []
+        for via in ["Av. Atahualpa", "Av. Hoyos Rubio", "Av. Los Héroes"]:
+            gv = df_te_720[df_te_720["via"] == via]
+            p85_c = umbrales[via]["P85"]
+            al_c = p85_c * (1.0 - margen_alerta)
+            ya = (gv["volumen"] >= p85_c).astype(int)
+            pa = (gv["pred"] >= al_c).astype(int)
+            rec_al = ((ya == 1) & (pa == 1)).sum() / max(1, ya.sum()) * 100
+            rows_via.append({
+                "Corredor": via,
+                "R²": round(r2_score(gv["volumen"], gv["pred"]), 3),
+                "MAPE %": round(mean_absolute_percentage_error(gv["volumen"], gv["pred"]) * 100, 2),
+                "MAE": round(mean_absolute_error(gv["volumen"], gv["pred"]), 2),
+                "RMSE": round(root_mean_squared_error(gv["volumen"], gv["pred"]), 2),
+                "Int. altos (≥ P85)": int(ya.sum()),
+                "Recall alerta %": round(rec_al, 1),
+            })
+        st.dataframe(pd.DataFrame(rows_via), use_container_width=True, hide_index=True)
 
-with col_kpi2:
-    st.markdown('<div class="kpi-card">', unsafe_allow_html=True)
-    st.metric("Tasa Horaria Equivalente", f"{pred_vhmd:.0f} veh/h", delta=f"FHP est.: {umb_via['FHP']:.3f}")
-    st.markdown('</div>', unsafe_allow_html=True)
-
-with col_kpi3:
-    st.markdown('<div class="kpi-card">', unsafe_allow_html=True)
-    st.write("**Nivel de Congestión:**")
-    st.markdown(badge_html, unsafe_allow_html=True)
-    st.caption(f"Capacidad máx: {umb_via['capacidad_max']} veh/15m")
-    st.markdown('</div>', unsafe_allow_html=True)
-
-with col_kpi4:
-    st.markdown('<div class="kpi-card">', unsafe_allow_html=True)
-    st.metric("Latencia de Inferencia", f"{latencia_ms:.2f} ms", delta="Tiempo Real (<2s)")
-    st.caption(los_estimado)
-    st.markdown('</div>', unsafe_allow_html=True)
-
-st.markdown("---")
-
-# Fila 2: Recomendación de Semaforización Adaptativa
-st.subheader("🚥 Recomendación para el Centro de Control de Tránsito (Cajamarca)")
-info_box = f"""
-* **Corredor Evaluado:** {corredor_sel}
-* **Horario Consultado:** {hora_txt} hrs | **Día:** {dia_nom}
-* **Directiva de Semaforización:** **{semaforo_rec}**
-* **Operatividad Vial:** {los_estimado} con saturación estimada al {(pred_volumen / umb_via['capacidad_max']) * 100:.1f} % de la capacidad geométrica.
-"""
-st.info(info_box)
-
-# Fila 3: Gráficos de Análisis Predictivo
-col_g1, col_g2 = st.columns([6, 4])
-
-with col_g1:
-    st.subheader("📈 Proyección del Perfil Diario de Tránsito")
-    
-    # Generar curva horaria simulada para el día completo
-    horas_dia = np.arange(6.5, 20.25, 0.25)
-    flujos_sim = []
-    for h in horas_dia:
-        row_sim = input_dict.copy()
-        row_sim["hora"] = h
-        if 7.25 <= h <= 8.75 or 12.75 <= h <= 14.0 or 18.0 <= h <= 19.5:
-            base_h = umb_via["P85"] * 0.95
-        else:
-            base_h = umb_via["P50"] * 0.80
-        row_sim["lag_1"] = base_h
-        row_sim["lag_2"] = base_h * 0.95
-        row_sim["lag_4"] = base_h * 0.90
-        row_sim["media_1h"] = base_h * 0.95
-        df_sim = pd.DataFrame([row_sim])[features]
-        flujos_sim.append(float(modelo.predict(df_sim)[0]))
-        
-    horas_etiquetas = [f"{int(h):02d}:{int(round((h-int(h))*60)):02d}" for h in horas_dia]
-    
-    fig_line = go.Figure()
-    fig_line.add_trace(go.Scatter(
-        x=horas_etiquetas, y=flujos_sim,
-        mode="lines", name="Demanda Proyectada",
-        line=dict(color="#2563EB", width=3)
-    ))
-    # Líneas de umbrales
-    fig_line.add_hline(y=umb_via["P85"], line_dash="dash", line_color="#DC2626", annotation_text="Congestión Alta (P85)")
-    fig_line.add_hline(y=umb_via["P50"], line_dash="dot", line_color="#F59E0B", annotation_text="Mediana (P50)")
-    
-    # Punto actual
-    fig_line.add_trace(go.Scatter(
-        x=[hora_txt], y=[pred_volumen],
-        mode="markers", name="Punto Actual",
-        marker=dict(color=color_grafico, size=14, symbol="diamond", line=dict(color="black", width=1.5))
-    ))
-    
-    fig_line.update_layout(
-        title=f"Curva de Carga Horaria Estimada — {corredor_sel}",
-        xaxis_title="Hora del Día",
-        yaxis_title="Vehículos / 15 minutos",
-        hovermode="x unified",
-        margin=dict(l=20, r=20, t=40, b=20),
-        height=380
-    )
-    st.plotly_chart(fig_line, use_container_width=True)
-
-with col_g2:
-    st.subheader("🛵 Desglose Modal del Tránsito")
-    
-    modal_df = pd.DataFrame([
-        {"Tipo": k, "Porcentaje": v, "Volumen": pred_volumen * (v / 100.0)}
-        for k, v in composicion_modal.items()
-    ])
-    
-    fig_pie = px.pie(
-        modal_df,
-        names="Tipo",
-        values="Volumen",
-        title="Composición Vehicular Estimada en Cajamarca",
-        color_discrete_sequence=["#F59E0B", "#EF4444", "#3B82F6", "#10B981", "#8B5CF6"]
-    )
-    fig_pie.update_traces(textposition="inside", textinfo="percent+label")
-    fig_pie.update_layout(height=380, margin=dict(l=20, r=20, t=40, b=20))
-    st.plotly_chart(fig_pie, use_container_width=True)
-
-# Pestañas de soporte técnico y académico
-with st.expander("📚 Ficha Técnica del Modelo y Métricas Universitarias"):
+# Ficha Técnica
+with st.expander("📚 Ficha Técnica del Modelo Final y Transparencia Metodológica"):
     col_t1, col_t2 = st.columns(2)
     with col_t1:
         st.markdown(r"""
-        **Arquitectura y Entrenamiento:**
-        * **Algoritmo:** XGBoost Regressor (Extreme Gradient Boosting)
-        * **Hiperparámetros:** Estimadores = 450, Learning Rate = 0.035, Max Depth = 5, L2 Reg ($\lambda$) = 2.5.
-        * **Dataset Real:** 4 212 registros de aforo continuo de Cajamarca (UPN 2023, UNC 2022).
-        * **Variables Exógenas:** Temperatura y Precipitación horaria de la API de Open-Meteo (-7.1638, -78.5003).
-        * **Validación:** Partición cronológica estricta sin fuga temporal (70 % train, 15 % val, 15 % test).
+        **Arquitectura y Datos:**
+        * **Modelo final:** XGBoost Regressor (`learning_rate=0.01`, `max_depth=7`, `subsample=0.8`, `reg_lambda=1`, parada temprana 50 rondas).
+        * **Variables seleccionadas (Tabla 22):** Solo calendario (**11 variables**: `hora`, `dia_semana` one-hot y `via` one-hot).
+        * **Dataset:** `aforos_cajamarca.csv` (4 212 intervalos de 15 min, 27 días: 16/05 al 11/06/2023), reconstruido a partir de perfiles de aforo de referencia (García Díaz, 2023; Cusquisibán Del Campo, 2023) y clima de Open-Meteo.
+        * **Partición cronológica sin fuga:** 18 días entrenamiento (2 808), 4 validación (624), 5 prueba (780; evaluación común 08:00–19:45 = 720).
         """)
     with col_t2:
         st.markdown(r"""
-        **Métricas Oficiales en Prueba (780 intervalos):**
-        * **Coeficiente $R^2$:** **0.9826** (Criterio de éxito $\ge 0.85$ ✅)
-        * **Error MAPE:** **3.47 %** (Criterio de éxito $\le 15.0\%$ ✅)
-        * **Error RMSE:** **21.22 veh/15 min** (Reducción de 36.86 % frente a base lineal ✅)
-        * **Brecha de Generalización:** **3.54 %** (Sin sobreajuste ✅)
-        * **Latencia de Inferencia:** **0.0042 s** ($< 2.0\text{ s}$ ✅)
+        **Desempeño Oficial y Alcance:**
+        * **R² global en prueba (720):** **0.988** (umbral $\ge 0.85$ ✅).
+        * **MAPE global:** **< 3.0 %** (umbral $\le 15.0\ \%$ ✅).
+        * **Mejora sobre línea base lineal:** **> 44 %** (umbral $\ge 20.0\ \%$ ✅).
+        * **Brecha de generalización:** **< 2.0 %** (umbral $\le 10.0\ \%$ ✅).
+        * **Limitación declarada:** Las clases Bajo, Moderado y Alto se basan en percentiles del volumen (P50/P85) sobre un dataset semisintético y no equivalen a niveles de servicio HCM medidos en campo.
         """)
-    st.caption("Proyecto de Investigación — Grupo 6: Luis Asencio, José Muñoz, Maria Quispe, Rodrigo Sánchez, Yeber Tasilla. Docente: Carlos Mendoza. Universidad Privada del Norte (UPN).")
+    st.caption(
+        "Proyecto de Investigación — Grupo 6: Luis Asencio, José Muñoz, María Quispe, Rodrigo Sánchez, Yeber Tasilla. "
+        "Docente: Carlos Mendoza. Universidad Privada del Norte (UPN)."
+    )
