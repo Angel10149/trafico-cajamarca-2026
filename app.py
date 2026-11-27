@@ -15,7 +15,7 @@ from sklearn.metrics import (
 
 # 1. Configuración de página
 st.set_page_config(
-    page_title="Predicción de Tráfico Cajamarca 2026 (v2)",
+    page_title="Predicción de Tráfico — Cajamarca 2026",
     page_icon="🚦",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -155,7 +155,7 @@ st.markdown(
     unsafe_allow_html=True,
 )
 st.markdown(
-    '<div class="sub-header">Modelo Final XGBoost (Solo Calendario, 11 variables) con Alerta Calibrada de Congestión</div>',
+    '<div class="sub-header">Sistema de apoyo a la decisión basado en Machine Learning (XGBoost) para alertas tempranas de congestión</div>',
     unsafe_allow_html=True,
 )
 
@@ -183,9 +183,8 @@ st.sidebar.caption(f"⏰ Intervalo seleccionado: **{hora_txt}**")
 
 st.sidebar.markdown("---")
 st.sidebar.info(
-    "**Modelo final v2 (Tabla 22):** Seleccionado por menor RMSE en validación. "
-    "Usa únicamente **hora, día de la semana y corredor** (11 variables), por lo que "
-    "no depende de sensores de rezago ni clima en tiempo real."
+    "Estimación basada en patrones horarios por corredor y día de la semana (XGBoost), "
+    "sin requerir sensores en tiempo real."
 )
 
 # Pestañas principales
